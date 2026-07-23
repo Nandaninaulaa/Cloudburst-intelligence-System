@@ -1,0 +1,43 @@
+# ─────────────────────────────────────────────────────────
+# CloudBurst — Docker Compose
+# ─────────────────────────────────────────────────────────
+# Usage:
+#   docker-compose up --build -d
+#   docker-compose logs -f
+# ─────────────────────────────────────────────────────────
+
+version: "3.9"
+
+services:
+  cloudburst:
+    build: .
+    container_name: cloudburst-app
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      # Mount model & data for live updates without rebuild
+      - ./model:/app/model
+      - ./data:/app/data
+      # Persist SQLite database
+      - cloudburst_data:/app/src/prediction
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+        reservations:
+          cpus: "1.0"
+          memory: 2G
+
+volumes:
+  cloudburst_data:
+

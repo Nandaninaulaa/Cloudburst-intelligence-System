@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────────────────────
+# CloudBurst — .dockerignore
+# ─────────────────────────────────────────────────────────
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Environment
+.env
+env.example
+model/env.example
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Temp/Logs
+*.log
+*.db  # Don't ignore if you want DB persistence; we use a volume
+
+# Large artifacts (rebuilt or mounted)
+model/*.keras
+model/*.pkl
+model/*.h5
+data/*.csv
+

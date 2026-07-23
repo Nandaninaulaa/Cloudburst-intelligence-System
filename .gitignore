@@ -1,0 +1,24 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv
+venv/
+ENV/
+
+# OS
+.DS_Store
+Thumbs.db
+# Large datasets
+data/uttarakhand_precip_final.csv
+data/ml_ready_lagged.csv
+data/ml_dataset.csv
+data/uttarakhand_hourly.csv
+data/ml_ready.csv
+
+# Optional
+data/*.csv
+!data/sample.csv

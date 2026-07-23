@@ -60,10 +60,11 @@ def get_weather(city: str) -> dict:
     try:
         # ── Primary (WeatherAPI) ────────────────────────────
         r1 = requests.get(
-            f"http://api.weatherapi.com/v1/current.json?key={WEATHER_API_KEY}&q={city}",
+            f"https://api.weatherapi.com/v1/current.json?key={WEATHER_API_KEY}&q={city}",
             timeout=8,
         )
         if r1.status_code != 200:
+            print(f"WeatherAPI request failed [{r1.status_code}]: {r1.text[:200]}")
             return None
 
         d1   = r1.json()
@@ -159,7 +160,7 @@ def get_forecast(city: str) -> list:
     """Fetch 3-day hourly forecast (precip, humidity)."""
     try:
         r = requests.get(
-            f"http://api.weatherapi.com/v1/forecast.json"
+            f"https://api.weatherapi.com/v1/forecast.json"
             f"?key={WEATHER_API_KEY}&q={city}&days=3",
             timeout=8,
         )
@@ -177,4 +178,5 @@ def get_forecast(city: str) -> list:
     except Exception as e:
         print("Forecast Error:", e)
         return []
+
 

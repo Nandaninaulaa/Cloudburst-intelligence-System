@@ -194,13 +194,17 @@ def bar_gradient(p):
 # ═══════════════════════════════════════════════════════════
 @st.cache_resource(show_spinner="Loading Models...")
 def load_models(cache_buster=3):
-    rf_path = BASE_DIR / "rf_cloudburst_model.pkl"
+    # Packaged releases keep trained models in <project>/model.  Retain the
+    # original adjacent-file lookup for development checkouts.
+    project_model_dir = BASE_DIR.parent.parent / "model"
+    model_dir = project_model_dir if project_model_dir.exists() else BASE_DIR
+    rf_path = model_dir / "rf_cloudburst_model.pkl"
     print(f"\n[DEBUG] Loading RF Model From: {rf_path}")
     rf_model = joblib.load(rf_path)
     print(f"[DEBUG] Loaded Features: {getattr(rf_model, 'feature_names_in_', 'NOT FOUND')}\n")
     
     # Check if XGBoost is available
-    xgb_path = BASE_DIR / "xgb_cloudburst_model.pkl"
+    xgb_path = model_dir / "xgb_cloudburst_model.pkl"
     if xgb_path.exists():
         try:
             xgb_model = joblib.load(xgb_path)
@@ -211,7 +215,7 @@ def load_models(cache_buster=3):
         xgb_model = None
         
     # Check if Stacking Model is available
-    stacking_path = BASE_DIR / "stacking_cloudburst_model.pkl"
+    stacking_path = model_dir / "stacking_cloudburst_model.pkl"
     if stacking_path.exists():
         try:
             stacking_model = joblib.load(stacking_path)
@@ -222,8 +226,8 @@ def load_models(cache_buster=3):
         stacking_model = None
     
     # Check if LSTM is available
-    lstm_path = BASE_DIR / "cloudburst_lstm_model.keras"
-    scaler_path = BASE_DIR / "lstm_scaler.pkl"
+    lstm_path = model_dir / "cloudburst_lstm_model.keras"
+    scaler_path = model_dir / "lstm_scaler.pkl"
     
     if lstm_path.exists():
         try:
@@ -276,6 +280,37 @@ FEATURE_NAMES = [
 WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
 SENDER_EMAIL    = os.getenv("SENDER_EMAIL")
 SENDER_PASS     = os.getenv("SENDER_PASS")
+
+
+def has_weatherapi_key():
+    """Return True only for a configured WeatherAPI key, not the sample value."""
+    return bool(WEATHER_API_KEY and "your_weather_api_key" not in WEATHER_API_KEY.lower())
+
+
+def open_meteo_location(city):
+    """Resolve a user supplied city name or `lat,lon` pair without an API key."""
+    try:
+        lat, lon = (float(value.strip()) for value in city.split(",", maxsplit=1))
+        return {"lat": lat, "lon": lon, "name": city, "country": ""}
+    except (ValueError, AttributeError):
+        pass
+
+    response = requests.get(
+        "https://geocoding-api.open-meteo.com/v1/search",
+        params={"name": city, "count": 1, "language": "en", "format": "json"},
+        timeout=8,
+    )
+    response.raise_for_status()
+    result = response.json().get("results", [])
+    if not result:
+        return None
+    match = result[0]
+    return {
+        "lat": match["latitude"],
+        "lon": match["longitude"],
+        "name": match["name"],
+        "country": match.get("country", ""),
+    }
 # ═══════════════════════════════════════════════════════════
 
 
@@ -298,8 +333,57 @@ def get_elevation(lat, lon):
     except: pass
     return 0
 
+
+def get_open_meteo_weather(city):
+    """Keyless weather fallback used when WeatherAPI has not been configured."""
+    try:
+        loc = open_meteo_location(city)
+        if loc is None:
+            return None
+        response = requests.get("https://api.open-meteo.com/v1/forecast", params={
+            "latitude": loc["lat"], "longitude": loc["lon"],
+            "current": "temperature_2m,relative_humidity_2m,precipitation,surface_pressure,wind_speed_10m,weather_code,cloud_cover,visibility",
+            "hourly": "surface_pressure,relative_humidity_2m",
+            "past_hours": 3, "forecast_hours": 1,
+        }, timeout=8)
+        response.raise_for_status()
+        data = response.json()
+        current = data.get("current", {})
+        if not current:
+            return None
+        hourly = data.get("hourly", {})
+        pressure = current.get("surface_pressure", 0)
+        humidity = current.get("relative_humidity_2m", 0)
+        pressure_history = hourly.get("surface_pressure", [])
+        humidity_history = hourly.get("relative_humidity_2m", [])
+        conditions = {0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+                      45: "Fog", 48: "Rime fog", 51: "Light drizzle", 53: "Drizzle",
+                      55: "Heavy drizzle", 61: "Slight rain", 63: "Rain", 65: "Heavy rain",
+                      80: "Rain showers", 81: "Heavy rain showers", 82: "Violent rain showers",
+                      95: "Thunderstorm", 96: "Thunderstorm with hail", 99: "Severe thunderstorm"}
+        return {
+            "precip": round(current.get("precipitation", 0), 2),
+            "temp": round(current.get("temperature_2m", 0), 1),
+            "humidity": round(humidity, 1), "pressure": round(pressure, 1),
+            "wind": round(current.get("wind_speed_10m", 0) / 3.6, 2),
+            "pressure_delta": round(pressure - pressure_history[0], 2) if pressure_history else 0,
+            "humidity_delta": round(humidity - humidity_history[0], 2) if humidity_history else 0,
+            "wind_dir": "—", "feelslike": current.get("temperature_2m", 0),
+            "vis": round(current.get("visibility", 0) / 1000, 1), "uv": "—",
+            "cloud": current.get("cloud_cover", "—"),
+            "condition": conditions.get(current.get("weather_code"), "Unknown"),
+            "lat": loc["lat"], "lon": loc["lon"],
+            "elevation": get_elevation(loc["lat"], loc["lon"]),
+            "name": loc["name"], "country": loc["country"], "consensus": False,
+        }
+    except (requests.RequestException, KeyError, TypeError, ValueError) as error:
+        print("Open-Meteo weather error:", error)
+        return None
+
 @st.cache_data(ttl=300, show_spinner=False)
 def get_weather(city):
+    if not has_weatherapi_key():
+        return get_open_meteo_weather(city)
     try:
         # 1. Primary Fetch (WeatherAPI + Spatial Coordinates)
         r1 = requests.get(
@@ -402,6 +486,25 @@ def get_weather(city):
 @st.cache_data(ttl=300, show_spinner=False)
 def get_forecast(city):
 
+    if not has_weatherapi_key():
+        try:
+            loc = open_meteo_location(city)
+            if loc is None:
+                return []
+            response = requests.get("https://api.open-meteo.com/v1/forecast", params={
+                "latitude": loc["lat"], "longitude": loc["lon"],
+                "hourly": "precipitation,relative_humidity_2m", "forecast_days": 3,
+            }, timeout=8)
+            response.raise_for_status()
+            hourly = response.json().get("hourly", {})
+            return [{"time": timestamp[-5:], "precip": precip, "humidity": humidity}
+                    for timestamp, precip, humidity in zip(hourly.get("time", []),
+                                                           hourly.get("precipitation", []),
+                                                           hourly.get("relative_humidity_2m", []))]
+        except requests.RequestException as error:
+            print("Open-Meteo forecast error:", error)
+            return []
+
     try:
         r = requests.get(
             f"http://api.weatherapi.com/v1/forecast.json?key={WEATHER_API_KEY}&q={city}&days=3",
@@ -454,9 +557,10 @@ def predict_for_watchlist(name, lat, lon, now_dt):
         lstm_p = None
 
     if stacking_model is not None:
-        X_stacking = X.copy()
-        X_stacking['lstm_proba'] = (lstm_p / 100.0) if lstm_p is not None else (rf_p / 100.0)
-        stack_p = stacking_model.predict_proba(X_stacking)[0][1] * 100
+        # The persisted StackingClassifier was trained on the RF features
+        # only.  Passing an LSTM probability adds an unseen column and makes
+        # sklearn reject the prediction input.
+        stack_p = stacking_model.predict_proba(X)[0][1] * 100
     else:
         stack_p = None
 
@@ -1001,9 +1105,7 @@ if lstm_model is not None and lstm_scaler is not None:
 if stacking_model is not None:
     import time
     t0 = time.time()
-    X_rf_stacking = X_rf.copy()
-    X_rf_stacking['lstm_proba'] = (lstm_raw_prob / 100.0) if lstm_raw_prob is not None else (rf_prob / 100.0)
-    stacking_prob = stacking_model.predict_proba(X_rf_stacking)[0][1] * 100
+    stacking_prob = stacking_model.predict_proba(X_rf)[0][1] * 100
     latency_ms = (time.time() - t0) * 1000
     try:
         import os
@@ -1055,7 +1157,6 @@ if is_live and forecast and stacking_model is not None:
         else:
             f_lstm_prob = rf_model.predict_proba(future_X)[0][1]
 
-        future_X['lstm_proba'] = f_lstm_prob
         f_prob = stacking_model.predict_proba(future_X)[0][1] * 100
         if f_prob > 75:
             lead_time_hours = i + 1
@@ -2732,4 +2833,4 @@ st.markdown(f"""
 
 if auto_refresh:
     time.sleep(60)
-    st.rerun() 
+    st.rerun()

@@ -1,3 +1,4 @@
+from src.prediction.risk_utils import risk_label
 import streamlit as st
 import numpy as np
 import pandas as pd
